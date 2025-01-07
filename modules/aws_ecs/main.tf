@@ -450,7 +450,12 @@ resource "aws_ecs_task_definition" "retool_code_executor" {
               name  = "CONTAINER_UNPRIVILEGED_MODE"
               value = "true"
             }
-          ] : []
+          ] : [
+            {
+            name  = "DISABLE_IPTABLES_SECURITY_CONFIGURATION"
+            value = "true"
+            }
+          ]
         )
       }
     ]
