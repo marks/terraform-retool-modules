@@ -127,6 +127,7 @@ data "aws_iam_policy_document" "ec2_policy" {
   statement {
     actions = [
       "ec2:DescribeTags",
+      "ec2:DescribeInstances",
       "ecs:CreateCluster",
       "ecs:DeregisterContainerInstance",
       "ecs:DiscoverPollEndpoint",
@@ -140,7 +141,12 @@ data "aws_iam_policy_document" "ec2_policy" {
       "ecr:GetDownloadUrlForLayer",
       "ecr:BatchGetImage",
       "logs:CreateLogStream",
-      "logs:PutLogEvents"
+      "logs:PutLogEvents",
+      "ec2:CreateNetworkInterface",
+      "ec2:DeleteNetworkInterface",
+      "ec2:DescribeNetworkInterfaces",
+      "ec2:AttachNetworkInterface",
+      "ec2:DetachNetworkInterface"
     ]
     resources = ["*"]
   }

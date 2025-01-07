@@ -23,7 +23,8 @@ resource "aws_ecs_cluster_capacity_providers" "this" {
 # Required setup for EC2 instances (if not using Fargate)
 data "aws_ami" "this" {
   most_recent = true # get the latest version
-  name_regex  = "^amzn2-ami-ecs-hvm-\\d\\.\\d\\.\\d{8}-x86_64-ebs$"
+  # name_regex  = "^amzn2-ami-ecs-hvm-\\d\\.\\d\\.\\d{8}-x86_64-ebs$"
+  name_regex = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
 
   filter {
     name = "virtualization-type"
@@ -32,32 +33,61 @@ data "aws_ami" "this" {
     ]
   }
 
+    filter {
+    name = "architecture"
+    values = [
+      "x86_64"
+    ]
+  }
+
   owners = [
     "amazon" # only official images
   ]
 }
 
-resource "aws_launch_configuration" "this" {
+resource "aws_launch_template" "this" {
   count         = var.launch_type == "EC2" ? 1 : 0
-  name_prefix   = "${var.deployment_name}-ecs-launch-configuration-"
+  name_prefix   = "${var.deployment_name}-ecs-launch-template-"
   image_id      = data.aws_ami.this.id
   instance_type = var.instance_type # e.g. t2.medium
 
-  enable_monitoring           = true
-  associate_public_ip_address = true
+  monitoring {
+    enabled = true
+  }
+
+  network_interfaces {
+    associate_public_ip_address = false
+    security_groups             = [aws_security_group.containers.id]
+  }
 
   # This user data represents a collection of “scripts” that will be executed the first time the machine starts.
   # This specific example makes sure the EC2 instance is automatically attached to the ECS cluster that we create earlier
   # and marks the instance as purchased through the Spot pricing
-  user_data = <<-EOF
-  #!/bin/bash
-  echo ECS_CLUSTER=${var.deployment_name}-ecs >> /etc/ecs/ecs.config
-  EOF
+user_data = base64encode(<<-EOF
+#!/bin/bash
+# Update system and install Docker
+sudo apt-get update -y
+sudo apt-get install -y docker.io
 
-  # We’ll see security groups later
-  security_groups = [
-    aws_security_group.containers.id
-  ]
+# Start and enable Docker
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Create ECS config directory and configuration file
+sudo mkdir -p /etc/ecs
+cat <<ECS_CONFIG > /etc/ecs/ecs.config
+ECS_CLUSTER=${var.deployment_name}-ecs
+ECS_ENABLE_TASK_ENI=true
+ECS_AVAILABLE_LOGGING_DRIVERS=["awslogs","json-file"]
+ECS_CONFIG
+
+# Install and start the ECS agent
+curl -O https://s3.us-west-1.amazonaws.com/amazon-ecs-agent-us-west-1/amazon-ecs-init-latest.amd64.deb
+sudo dpkg -i amazon-ecs-init-latest.amd64.deb
+sudo systemctl enable ecs
+sudo systemctl start ecs
+EOF
+)
 
   # If you want to SSH into the instance and manage it directly:
   # 1. Make sure this key exists in the AWS EC2 dashboard
@@ -66,7 +96,9 @@ resource "aws_launch_configuration" "this" {
   key_name = var.ssh_key_name
 
   # Allow the EC2 instances to access AWS resources on your behalf, using this instance profile and the permissions defined there
-  iam_instance_profile = aws_iam_instance_profile.ec2[0].arn
+  iam_instance_profile {
+    name = aws_iam_instance_profile.ec2[0].name
+  }
 
   lifecycle {
     create_before_destroy = true
@@ -74,16 +106,21 @@ resource "aws_launch_configuration" "this" {
 }
 
 resource "aws_autoscaling_group" "this" {
-  count                = var.launch_type == "EC2" ? 1 : 0
-  name                 = "${var.deployment_name}-autoscaling-group"
-  max_size             = var.max_instance_count
-  min_size             = var.min_instance_count
-  desired_capacity     = var.min_instance_count
-  vpc_zone_identifier  = var.private_subnet_ids
-  launch_configuration = aws_launch_configuration.this[0].name
+  count               = var.launch_type == "EC2" ? 1 : 0
+  name                = "${var.deployment_name}-autoscaling-group"
+  max_size            = var.max_instance_count
+  min_size            = var.min_instance_count
+  desired_capacity    = var.min_instance_count
+  vpc_zone_identifier = var.private_subnet_ids
+
+  launch_template {
+    id      = aws_launch_template.this[0].id
+    version = "$Latest"
+  }
 
   default_cooldown          = 30
   health_check_grace_period = 30
+  health_check_type         = "EC2"
 
   termination_policies = [
     "OldestInstance"
