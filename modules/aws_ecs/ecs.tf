@@ -23,12 +23,20 @@ resource "aws_ecs_cluster_capacity_providers" "this" {
 # Required setup for EC2 instances (if not using Fargate)
 data "aws_ami" "this" {
   most_recent = true # get the latest version
-  name_regex  = "^amzn2-ami-ecs-hvm-\\d\\.\\d\\.\\d{8}-x86_64-ebs$"
+  # name_regex  = "^amzn2-ami-ecs-hvm-\\d\\.\\d\\.\\d{8}-x86_64-ebs$"
+  name_regex = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
 
   filter {
     name = "virtualization-type"
     values = [
       "hvm"
+    ]
+  }
+
+    filter {
+    name = "architecture"
+    values = [
+      "x86_64"
     ]
   }
 
@@ -55,11 +63,31 @@ resource "aws_launch_template" "this" {
   # This user data represents a collection of “scripts” that will be executed the first time the machine starts.
   # This specific example makes sure the EC2 instance is automatically attached to the ECS cluster that we create earlier
   # and marks the instance as purchased through the Spot pricing
-  user_data = base64encode(<<-EOF
-    #!/bin/bash
-    echo ECS_CLUSTER=${var.deployment_name}-ecs >> /etc/ecs/ecs.config
-  EOF
-  )
+user_data = base64encode(<<-EOF
+#!/bin/bash
+# Update system and install Docker
+sudo apt-get update -y
+sudo apt-get install -y docker.io
+
+# Start and enable Docker
+sudo systemctl start docker
+sudo systemctl enable docker
+
+# Create ECS config directory and configuration file
+sudo mkdir -p /etc/ecs
+cat <<ECS_CONFIG > /etc/ecs/ecs.config
+ECS_CLUSTER=${var.deployment_name}-ecs
+ECS_ENABLE_TASK_ENI=true
+ECS_AVAILABLE_LOGGING_DRIVERS=["awslogs","json-file"]
+ECS_CONFIG
+
+# Install and start the ECS agent
+curl -O https://s3.us-west-1.amazonaws.com/amazon-ecs-agent-us-west-1/amazon-ecs-init-latest.amd64.deb
+sudo dpkg -i amazon-ecs-init-latest.amd64.deb
+sudo systemctl enable ecs
+sudo systemctl start ecs
+EOF
+)
 
   # If you want to SSH into the instance and manage it directly:
   # 1. Make sure this key exists in the AWS EC2 dashboard
